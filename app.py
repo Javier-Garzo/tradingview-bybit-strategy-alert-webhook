@@ -1,16 +1,49 @@
+from distutils.sysconfig import get_makefile_filename
 import json, config
 from flask import Flask, request, jsonify, render_template
-from binance.client import Client
-from binance.enums import *
+from pybit import usdt_perpetual
 
 app = Flask(__name__)
 
-client = Client(config.API_KEY, config.API_SECRET, tld='us')
+print("---------------------------------------")
+session_auth = usdt_perpetual.HTTP(
+    endpoint="https://api-testnet.bybit.com",
+    api_key=config.API_KEY,
+    api_secret=config.API_SECRET
+), 
 
-def order(side, quantity, symbol, order_type=ORDER_TYPE_MARKET):
+def order(sideIN, quantityIN, symbolIN):
     try:
-        print(f"sending order {order_type} - {side} {quantity} {symbol}")
-        order = client.create_order(symbol=symbol, side=side, type=order_type, quantity=quantity)
+        # check correct buy/sell order text
+        if sideIN.lower() == "buy":
+            sideIN = "Buy"
+        elif sideIN.lower() == "sell":
+            sideIN = "Sell"
+
+        # check if order is in the same side (short/long) that the current position. Used for have only one order running on bybit
+        position= session_auth[0].my_position(
+            symbol=symbolIN
+        )
+        differentSide = False 
+        if sideIN == "Sell" and position['result'][0]['size'] > 0: #Want sell and position is long
+            differentSide = True
+        elif sideIN == "Buy" and position['result'][1]['size'] > 0: #Want buy and position is short
+            differentSide = True
+
+        print("------------------------" +str(differentSide))
+        # Call API bybit
+        print(f"sending order Market - {sideIN} {quantityIN} {symbolIN}")
+        order = session_auth[0].place_active_order(
+            symbol=symbolIN,
+            side=sideIN,
+            order_type="Market",
+            qty=quantityIN,
+            time_in_force="GoodTillCancel",
+            reduce_only=differentSide,
+            close_on_trigger=differentSide
+        )
+        print(order)
+        order = True
     except Exception as e:
         print("an exception occured - {}".format(e))
         return False
@@ -20,6 +53,10 @@ def order(side, quantity, symbol, order_type=ORDER_TYPE_MARKET):
 @app.route('/')
 def welcome():
     return render_template('index.html')
+
+@app.route('/test')
+def whatever():
+    return 'this is a test rute'
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -34,7 +71,8 @@ def webhook():
 
     side = data['strategy']['order_action'].upper()
     quantity = data['strategy']['order_contracts']
-    order_response = order(side, quantity, "DOGEUSD")
+    ticker = data['ticker']
+    order_response = order(side, quantity, ticker)
 
     if order_response:
         return {
